@@ -1,13 +1,27 @@
+
 #!/bin/bash
-# Script to delete customers with no orders in the past year and log the result
+# Script to delete inactive customers (no orders in the last year)
 
-cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+# Log file
+LOG_FILE="/tmp/customer_cleanup_log.txt"
 
-cwd=$(pwd)
+# Run Django shell command to delete inactive customers
+DELETED_COUNT=$(python manage.py shell -c "
+from django.utils import timezone
+from datetime import timedelta
+from crm.models import Customer
 
-if [ -d "$cwd" ]; then
-    COUNT=$(python manage.py shell -c "from crm.models import Customer, Order; from django.utils import timezone; from datetime import timedelta; one_year_ago = timezone.now() - timedelta(days=365); to_delete = Customer.objects.exclude(order__created_at__gte=one_year_ago); deleted, _ = to_delete.delete(); print(deleted)")
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Deleted $COUNT inactive customers" >> /tmp/customer_cleanup_log.txt
-else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Failed to determine working directory" >> /tmp/customer_cleanup_log.txt
-fi
+cutoff_date = timezone.now() - timedelta(days=365)
+inactive_customers = Customer.objects.filter(
+    orders__isnull=True
+) | Customer.objects.filter(
+    orders__created_at__lt=cutoff_date
+).distinct()
+
+count = inactive_customers.count()
+inactive_customers.delete()
+print(count)
+")
+
+# Append result with timestamp to log
+echo \"\$(date '+%Y-%m-%d %H:%M:%S') - Deleted \$DELETED_COUNT inactive customers\" >> \$LOG_FILE

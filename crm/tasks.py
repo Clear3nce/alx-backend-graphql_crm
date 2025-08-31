@@ -1,31 +1,49 @@
 from celery import shared_task
-import requests
 from datetime import datetime
+from gql import gql, Client
+from gql.transport.requests import RequestsHTTPTransport
+import requests
 
-def log_report(customers, orders, revenue):
-    with open('/tmp/crm_report_log.txt', 'a') as log_file:
-        log_file.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Report: {customers} customers, {orders} orders, {revenue} revenue\n")
+
+LOG_FILE = "/tmp/crm_report_log.txt"
+GRAPHQL_ENDPOINT = "http://localhost:8000/graphql"
+
 
 @shared_task
 def generate_crm_report():
-    query = """
-    query {
-        customersCount
-        ordersCount
-        totalRevenue
-    }
-    """
+    """Generates a weekly CRM report with total customers, orders, revenue."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    message = f"{timestamp} - Report: "
 
-    response = requests.post(
-        'http://localhost:8000/graphql',
-        json={'query': query}
-    )
+    try:
+        transport = RequestsHTTPTransport(
+            url=GRAPHQL_ENDPOINT,
+            verify=True,
+            retries=3,
+        )
+        client = Client(transport=transport, fetch_schema_from_transport=True)
 
-    if response.status_code == 200:
-        data = response.json().get('data', {})
-        customers = data.get('customersCount', 0)
-        orders = data.get('ordersCount', 0)
-        revenue = data.get('totalRevenue', 0)
-        log_report(customers, orders, revenue)
-    else:
-        print(f"Failed to fetch CRM report: {response.status_code}")
+        query = gql(
+            """
+            query {
+              customers { id }
+              orders { id totalAmount }
+            }
+            """
+        )
+
+        result = client.execute(query)
+        customers = result.get("customers", [])
+        orders = result.get("orders", [])
+
+        total_customers = len(customers)
+        total_orders = len(orders)
+        total_revenue = sum([float(order["totalAmount"]) for order in orders])
+
+        message += f"{total_customers} customers, {total_orders} orders, {total_revenue} revenue"
+
+    except Exception as e:
+        message += f"Failed to generate report: {e}"
+
+    with open(LOG_FILE, "a") as f:
+        f.write(message + "\n")

@@ -1,37 +1,67 @@
-import requests
+
+#!/usr/bin/env python3
+"""
+Script to query pending orders (last 7 days) from GraphQL API
+and log reminders with timestamp.
+"""
+
+import sys
+import asyncio
 from datetime import datetime, timedelta
 from gql import gql, Client
 from gql.transport.requests import RequestsHTTPTransport
 
-# Define the GraphQL query
-query = gql("""
-query ($startDate: String!, $endDate: String!) {
-  orders(orderDate_Gte: $startDate, orderDate_Lte: $endDate) {
-    id
-    customer {
-      email
-    }
-  }
-}
-""")
+# GraphQL endpoint
+GRAPHQL_ENDPOINT = "http://localhost:8000/graphql"
 
-# Calculate the date range for the last 7 days
-end_date = datetime.now().strftime('%Y-%m-%d')
-start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+# Log file
+LOG_FILE = "/tmp/order_reminders_log.txt"
 
-# Set up the GraphQL client
-transport = RequestsHTTPTransport(url='http://localhost:8000/graphql')
-client = Client(transport=transport, fetch_schema_from_transport=True)
 
-# Execute the query
-params = {"startDate": start_date, "endDate": end_date}
-response = client.execute(query, variable_values=params)
+async def main():
+    try:
+        # Define transport
+        transport = RequestsHTTPTransport(
+            url=GRAPHQL_ENDPOINT,
+            verify=True,
+            retries=3,
+        )
 
-# Log the orders
-with open('/tmp/order_reminders_log.txt', 'a') as log_file:
-    for order in response.get('orders', []):
-        order_id = order['id']
-        customer_email = order['customer']['email']
-        log_file.write(f"{datetime.now()} - Order ID: {order_id}, Customer Email: {customer_email}\n")
+        client = Client(transport=transport, fetch_schema_from_transport=True)
 
-print("Order reminders processed!")
+        # Calculate cutoff date
+        cutoff_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+        # GraphQL query (adjust field names if different in your schema)
+        query = gql(
+            """
+            query GetRecentOrders($cutoff: Date!) {
+              orders(filter: {orderDate_Gte: $cutoff}) {
+                id
+                customer {
+                  email
+                }
+              }
+            }
+            """
+        )
+
+        variables = {"cutoff": cutoff_date}
+        result = await client.execute_async(query, variable_values=variables)
+
+        orders = result.get("orders", [])
+
+        with open(LOG_FILE, "a") as f:
+            for order in orders:
+                log_line = f"{datetime.now()} - Order ID: {order['id']} - Customer Email: {order['customer']['email']}\n"
+                f.write(log_line)
+
+        print("Order reminders processed!")
+
+    except Exception as e:
+        sys.stderr.write(f"Error: {e}\n")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
